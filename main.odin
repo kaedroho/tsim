@@ -6,14 +6,7 @@ import "core:fmt"
 import rl "vendor:raylib"
 
 main :: proc() {
-	positions: [dynamic][2]f32
-
-	for i := 0; i < 1000; i += 1 {
-		append(&positions, [2]f32{
-			rand.float32_range(0, 1000),
-			rand.float32_range(0, 1000),
-		})
-	}
+	positions := poisson_generate(1000, 1000, 30, 0x12345678)
 
 	arena: vmem.Arena
 	arena_allocator := vmem.arena_allocator(&arena)
