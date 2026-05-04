@@ -10,9 +10,9 @@ SCALE :: f32(0.5) // world is 2000x2000, window is 1000x1000
 
 main :: proc() {
 	m := generate_map(MAP_WIDTH, MAP_HEIGHT, MAP_SEED)
-	defer voronoi_map_destroy(&m)
+	defer map_destroy(&m)
 
-	rgb := draw_image_rgb(&m, MAP_WIDTH, MAP_HEIGHT); defer delete(rgb)
+	rgb := draw_image_rgb(&m.geology, MAP_WIDTH, MAP_HEIGHT); defer delete(rgb)
 	rgb_img := rl.Image {
 		data    = raw_data(rgb),
 		width   = i32(MAP_WIDTH),
@@ -24,7 +24,7 @@ main :: proc() {
 		fmt.eprintln("failed to write map.png")
 	}
 
-	water := draw_watermap_rgb(&m, MAP_WIDTH, MAP_HEIGHT); defer delete(water)
+	water := draw_watermap_rgb(&m.geology, MAP_WIDTH, MAP_HEIGHT); defer delete(water)
 	water_img := rl.Image {
 		data    = raw_data(water),
 		width   = i32(MAP_WIDTH),
@@ -38,7 +38,7 @@ main :: proc() {
 
 	// 16-bit grayscale PGM is the easiest way to round-trip the heightmap;
 	// raylib's PNG exporter is 8-bit only.
-	hm := draw_heightmap_u16(&m, MAP_WIDTH, MAP_HEIGHT); defer delete(hm)
+	hm := draw_heightmap_u16(&m.geology, MAP_WIDTH, MAP_HEIGHT); defer delete(hm)
 	write_pgm_p5("height.pgm", MAP_WIDTH, MAP_HEIGHT, hm)
 
 	// 8-bit grayscale PNG preview (high byte of each u16).
@@ -55,7 +55,7 @@ main :: proc() {
 		fmt.eprintln("failed to write height.png")
 	}
 
-	is_neighbor := make([]bool, len(m.voronoi.cells))
+	is_neighbor := make([]bool, len(m.geology.voronoi.cells))
 	defer delete(is_neighbor)
 
 	rl.InitWindow(1000, 1000, "TSim")
@@ -63,11 +63,11 @@ main :: proc() {
 
 
 	for !rl.WindowShouldClose() {
-		nearest, _, _ := kdtree_nearest(m.kdtree, rl.GetMousePosition() * 2)
+		nearest, _, _ := kdtree_nearest(m.geology.kdtree, rl.GetMousePosition() * 2)
 
 		// Refresh neighbour mask for the nearest cell.
 		for i in 0 ..< len(is_neighbor) do is_neighbor[i] = false
-		for nb in m.voronoi.cells[nearest].neighbors {
+		for nb in m.geology.voronoi.cells[nearest].neighbors {
 			is_neighbor[nb] = true
 		}
 

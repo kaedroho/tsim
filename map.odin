@@ -17,7 +17,6 @@ import "core:math/noise"
 import "core:math/rand"
 import vmem "core:mem/virtual"
 import "core:os"
-import rl "vendor:raylib"
 
 // =============================================================================
 // Cell types
@@ -49,7 +48,7 @@ cell_is_land :: proc(ct: CellType) -> bool {
 // VoronoiMap
 // =============================================================================
 
-VoronoiMap :: struct {
+MapGeology :: struct {
 	width, height: u32,
 	positions:     [dynamic][2]f32,
 	heights:       []f32,
@@ -60,13 +59,13 @@ VoronoiMap :: struct {
 
 InitCellProc :: #type proc(position: [2]f32, user_data: rawptr) -> (CellType, f32)
 
-voronoi_map_make :: proc(
+map_geology_make :: proc(
 	width, height: u32,
 	radius: f32,
 	seed: u32,
 	init_cell: InitCellProc,
 	user_data: rawptr = nil,
-) -> VoronoiMap {
+) -> MapGeology {
 	positions := poisson_generate(f32(width), f32(height), radius, u64(seed))
 
 	kdtree_arena: vmem.Arena
@@ -92,7 +91,7 @@ voronoi_map_make :: proc(
 	}
 }
 
-voronoi_map_destroy :: proc(m: ^VoronoiMap) {
+map_geology_destroy :: proc(m: ^MapGeology) {
 	kdtree_destroy(&m.kdtree)
 	voronoi_destroy(&m.voronoi)
 	delete(m.positions)
@@ -101,7 +100,7 @@ voronoi_map_destroy :: proc(m: ^VoronoiMap) {
 }
 
 // Returns the two endpoints of the Voronoi edge shared by cells a and b.
-get_edge_between_cells :: proc(m: ^VoronoiMap, a, b: int) -> (start, end: [2]f32, ok: bool) {
+get_edge_between_cells :: proc(m: ^MapGeology, a, b: int) -> (start, end: [2]f32, ok: bool) {
 	first_shared := -1
 	for ta in m.voronoi.cells[a].triangles {
 		for tb in m.voronoi.cells[b].triangles {
@@ -119,7 +118,7 @@ get_edge_between_cells :: proc(m: ^VoronoiMap, a, b: int) -> (start, end: [2]f32
 
 // Connected-component labelling for water cells.
 // `cell_to_body[i]` is the waterbody index for cell i, or -1 if it's land.
-find_waterbodies :: proc(m: ^VoronoiMap) -> (bodies: [][]int, cell_to_body: []int) {
+find_waterbodies :: proc(m: ^MapGeology) -> (bodies: [][]int, cell_to_body: []int) {
 	n := len(m.positions)
 	cell_to_body = make([]int, n)
 	for i in 0 ..< n do cell_to_body[i] = -1
@@ -154,7 +153,7 @@ find_waterbodies :: proc(m: ^VoronoiMap) -> (bodies: [][]int, cell_to_body: []in
 }
 
 // Land cells whose perimeter is more than 55% adjacent to water → Headland.
-find_headlands :: proc(m: ^VoronoiMap) {
+find_headlands :: proc(m: ^MapGeology) {
 	rocks: [dynamic]int
 	defer delete(rocks)
 
@@ -179,7 +178,7 @@ find_headlands :: proc(m: ^VoronoiMap) {
 }
 
 // Land cells touching any water
-find_coasts :: proc(m: ^VoronoiMap) {
+find_coasts :: proc(m: ^MapGeology) {
 	for &ct, idx in m.cell_types {
 		if land, ok := &ct.(Land); ok {
 			for nb in m.voronoi.cells[idx].neighbors {
@@ -194,7 +193,7 @@ find_coasts :: proc(m: ^VoronoiMap) {
 
 // Convert land cells adjacent to two or more distinct waterbodies to water,
 // so that the resulting waterbodies can be navigated end-to-end.
-make_waterbodies_navigable :: proc(m: ^VoronoiMap) {
+make_waterbodies_navigable :: proc(m: ^MapGeology) {
 	bodies, cell_to_body := find_waterbodies(m)
 	defer {
 		for b in bodies do delete(b)
@@ -219,7 +218,7 @@ make_waterbodies_navigable :: proc(m: ^VoronoiMap) {
 
 // Detect coves by counting land/water transitions around their ring of
 // neighbours
-detect_coves :: proc(m: ^VoronoiMap) {
+detect_coves :: proc(m: ^MapGeology) {
 	for &ct, idx in m.cell_types {
 		if water, ok := &ct.(Water); ok {
 			nbs := m.voronoi.cells[idx].neighbors
@@ -244,7 +243,7 @@ detect_coves :: proc(m: ^VoronoiMap) {
 
 // Cellular-automaton smoothing. A land cell with <25% land neighbours becomes
 // water; a water cell with >75% land neighbours becomes land.
-voronoi_smooth :: proc(m: ^VoronoiMap, rounds: int) {
+voronoi_smooth :: proc(m: ^MapGeology, rounds: int) {
 	n := len(m.cell_types)
 	next := make([]CellType, n); defer delete(next)
 
@@ -274,13 +273,13 @@ voronoi_smooth :: proc(m: ^VoronoiMap, rounds: int) {
 // Resample with a finer Poisson radius, copying cell type / height from the
 // nearest source cell.
 expand_init :: proc(position: [2]f32, user_data: rawptr) -> (CellType, f32) {
-	src := cast(^VoronoiMap)user_data
+	src := cast(^MapGeology)user_data
 	idx, _, _ := kdtree_nearest(src.kdtree, position)
 	return src.cell_types[idx], src.heights[idx]
 }
 
-voronoi_expand :: proc(m: ^VoronoiMap, radius: f32, seed: u32) -> VoronoiMap {
-	return voronoi_map_make(m.width, m.height, radius, seed, expand_init, m)
+voronoi_expand :: proc(m: ^MapGeology, radius: f32, seed: u32) -> MapGeology {
+	return map_geology_make(m.width, m.height, radius, seed, expand_init, m)
 }
 
 // =============================================================================
@@ -298,13 +297,17 @@ perlin_init :: proc(position: [2]f32, user_data: rawptr) -> (CellType, f32) {
 	return (Land{} if f32(n) > p.threshold else Water{}), 0.0
 }
 
-count_land :: proc(m: ^VoronoiMap) -> int {
+count_land :: proc(m: ^MapGeology) -> int {
 	c := 0
 	for ct in m.cell_types do if cell_is_land(ct) do c += 1
 	return c
 }
 
-generate_map :: proc(width, height: u32, seed: u32) -> VoronoiMap {
+Map :: struct {
+	geology: MapGeology,
+}
+
+generate_map :: proc(width, height: u32, seed: u32) -> Map {
 	rng := rand.create(u64(seed))
 	perlin := PerlinThreshold {
 		seed      = i64(seed),
@@ -312,7 +315,7 @@ generate_map :: proc(width, height: u32, seed: u32) -> VoronoiMap {
 	}
 
 	// First pass: tune the threshold until land coverage lands in [45%, 55%].
-	l1 := voronoi_map_make(width, height, 100.0, seed, perlin_init, &perlin)
+	l1 := map_geology_make(width, height, 100.0, seed, perlin_init, &perlin)
 	voronoi_smooth(&l1, 2)
 
 	percent_land := f32(count_land(&l1)) / f32(len(l1.cell_types))
@@ -320,8 +323,8 @@ generate_map :: proc(width, height: u32, seed: u32) -> VoronoiMap {
 		if percent_land < 0.45 do perlin.threshold -= 0.01
 		else do perlin.threshold += 0.01
 
-		voronoi_map_destroy(&l1)
-		l1 = voronoi_map_make(width, height, 100.0, seed, perlin_init, &perlin)
+		map_geology_destroy(&l1)
+		l1 = map_geology_make(width, height, 100.0, seed, perlin_init, &perlin)
 		voronoi_smooth(&l1, 2)
 		percent_land = f32(count_land(&l1)) / f32(len(l1.cell_types))
 	}
@@ -329,15 +332,15 @@ generate_map :: proc(width, height: u32, seed: u32) -> VoronoiMap {
 	make_waterbodies_navigable(&l1)
 	detect_coves(&l1)
 
-	l2 := voronoi_expand(&l1, 50.0, seed); voronoi_map_destroy(&l1)
+	l2 := voronoi_expand(&l1, 50.0, seed); map_geology_destroy(&l1)
 	voronoi_smooth(&l2, 2)
 	find_headlands(&l2)
 
-	l3 := voronoi_expand(&l2, 20.0, seed); voronoi_map_destroy(&l2)
+	l3 := voronoi_expand(&l2, 20.0, seed); map_geology_destroy(&l2)
 	voronoi_smooth(&l3, 2)
 	find_headlands(&l3)
 
-	l4 := voronoi_expand(&l3, 5.0, seed); voronoi_map_destroy(&l3)
+	l4 := voronoi_expand(&l3, 5.0, seed); map_geology_destroy(&l3)
 	voronoi_smooth(&l4, 2)
 	find_coasts(&l4)
 
@@ -443,7 +446,11 @@ generate_map :: proc(width, height: u32, seed: u32) -> VoronoiMap {
 		}
 	}
 
-	return l4
+	return Map{geology = l4}
+}
+
+map_destroy :: proc(m: ^Map) {
+	map_geology_destroy(&m.geology)
 }
 
 // =============================================================================
@@ -478,7 +485,7 @@ color_for :: proc(ct: CellType) -> (r, g, b: u8) {
 }
 
 // Per-pixel nearest-cell rasterisation (replaces the imageproc polygon draw).
-draw_image_rgb :: proc(m: ^VoronoiMap, width, height: u32) -> []u8 {
+draw_image_rgb :: proc(m: ^MapGeology, width, height: u32) -> []u8 {
 	img := make([]u8, int(width) * int(height) * 3)
 	for y in 0 ..< height {
 		for x in 0 ..< width {
@@ -495,7 +502,7 @@ draw_image_rgb :: proc(m: ^VoronoiMap, width, height: u32) -> []u8 {
 	return img
 }
 
-draw_heightmap_u16 :: proc(m: ^VoronoiMap, width, height: u32) -> []u16 {
+draw_heightmap_u16 :: proc(m: ^MapGeology, width, height: u32) -> []u16 {
 	img := make([]u16, int(width) * int(height))
 	for y in 0 ..< height {
 		for x in 0 ..< width {
@@ -514,7 +521,7 @@ draw_heightmap_u16 :: proc(m: ^VoronoiMap, width, height: u32) -> []u16 {
 // Watermap simulation. Note: the input `surface_water_next` accumulator was a
 // straight port of the original, which never zeroes itself between iterations
 // — kept that way deliberately so behaviour matches.
-draw_watermap_rgb :: proc(m: ^VoronoiMap, width, height: u32) -> []u8 {
+draw_watermap_rgb :: proc(m: ^MapGeology, width, height: u32) -> []u8 {
 	n := len(m.positions)
 	surface_water := make([]f32, n); defer delete(surface_water)
 	surface_water_next := make([]f32, n); defer delete(surface_water_next)
