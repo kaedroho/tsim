@@ -50,8 +50,7 @@ VoronoiMap :: struct {
 	positions:     [dynamic][2]f32,
 	heights:       []f32,
 	cell_types:    []CellType,
-	kdtree:        ^KDTreeNode,
-	kdtree_arena:  vmem.Arena,
+	kdtree:        KdTree,
 	voronoi:       Voronoi,
 }
 
@@ -68,7 +67,7 @@ voronoi_map_make :: proc(
 
 	kdtree_arena: vmem.Arena
 	kdtree_arena_allocator := vmem.arena_allocator(&kdtree_arena)
-	kdtree := kdtree_build(positions[:], allocator = kdtree_arena_allocator)
+	kdtree := kdtree_make(positions[:], allocator = kdtree_arena_allocator)
 
 	cell_types := make([]CellType, len(positions))
 	heights := make([]f32, len(positions))
@@ -85,13 +84,12 @@ voronoi_map_make :: proc(
 		heights = heights,
 		cell_types = cell_types,
 		kdtree = kdtree,
-		kdtree_arena = kdtree_arena,
 		voronoi = voronoi,
 	}
 }
 
 voronoi_map_destroy :: proc(m: ^VoronoiMap) {
-	vmem.arena_destroy(&m.kdtree_arena)
+	kdtree_destroy(&m.kdtree)
 	voronoi_destroy(&m.voronoi)
 	delete(m.positions)
 	delete(m.heights)
@@ -604,7 +602,7 @@ gemmapmain :: proc() {
 	// 8-bit grayscale PNG preview (high byte of each u16).
 	hm8 := make([]u8, len(hm)); defer delete(hm8)
 	for v, i in hm do hm8[i] = u8(v >> 8)
-	hm_img := rl.Image{
+	hm_img := rl.Image {
 		data    = raw_data(hm8),
 		width   = i32(width),
 		height  = i32(height),

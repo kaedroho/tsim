@@ -1,7 +1,6 @@
 package main
 
 import "core:fmt"
-import vmem "core:mem/virtual"
 import rl "vendor:raylib"
 
 main :: proc() {
@@ -9,9 +8,7 @@ main :: proc() {
 
 	gemmapmain()
 
-	arena: vmem.Arena
-	arena_allocator := vmem.arena_allocator(&arena)
-	kdtree := kdtree_build(positions[:], allocator = arena_allocator)
+	kdtree := kdtree_make(positions[:])
 	voronoi := voronoi_build(positions[:], 2000, 2000, 5)
 
 	rl.InitWindow(1000, 1000, "TSim")
