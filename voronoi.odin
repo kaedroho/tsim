@@ -5,8 +5,8 @@ import "base:runtime"
 VoronoiCell :: struct {
 	site:      Vector2,
 	vertices:  []Vector2, // CCW polygon, clipped to [0, width] x [0, height]
-	neighbors: []u32,     // adjacent real-site indices, CCW (no ghost neighbours)
-	triangles: []u32,     // incident Delaunay triangle IDs (no ghost-incident triangles)
+	neighbors: []u32, // adjacent real-site indices, CCW (no ghost neighbours)
+	triangles: []u32, // incident Delaunay triangle IDs (no ghost-incident triangles)
 }
 
 Voronoi :: struct {
@@ -35,17 +35,16 @@ voronoi_build :: proc(
 	pad := max(width, height) * 100
 	_voronoi_pack(extended, relaxed, width, height, pad)
 
-	trn: Triangulation
-	delaunay_init(&trn, extended, allocator)
-	defer delaunay_destroy(&trn)
+	trn := triangulate(sites)
 
 	for _ in 0 ..< lloyd_iters {
-		_voronoi_lloyd_step(&trn, relaxed, width, height, allocator)
+		_voronoi_lloyd_step(sites, &trn, relaxed, width, height, allocator)
 		_voronoi_pack(extended, relaxed, width, height, pad)
-		delaunay_update(&trn)
+		trn := triangulate(relaxed)
+		copy(sites, relaxed)
 	}
 
-	return _voronoi_finalize(&trn, relaxed, width, height, allocator)
+	return _voronoi_finalize(sites, &trn, relaxed, width, height, allocator)
 }
 
 voronoi_destroy :: proc(v: ^Voronoi) {
@@ -76,15 +75,18 @@ _voronoi_pack :: proc(extended, real_sites: []Vector2, width, height, pad: f32) 
 
 // Circumcenter per Delaunay triangle (parallel to trn.triangles in groups of 3).
 @(private)
-_voronoi_circumcenters :: proc(trn: ^Triangulation, allocator: runtime.Allocator) -> []Vector2 {
+_voronoi_circumcenters :: proc(
+	sites: []Vector2,
+	trn: ^Triangulation,
+	allocator: runtime.Allocator,
+) -> []Vector2 {
 	num_tri := len(trn.triangles) / 3
 	out := make([]Vector2, num_tri, allocator)
 	for t in 0 ..< num_tri {
-		a := trn.coords[trn.triangles[3 * t]]
-		b := trn.coords[trn.triangles[3 * t + 1]]
-		c := trn.coords[trn.triangles[3 * t + 2]]
-		x, y := circumcenter(a.x, a.y, b.x, b.y, c.x, c.y)
-		out[t] = {x, y}
+		a := sites[trn.triangles[3 * t]]
+		b := sites[trn.triangles[3 * t + 1]]
+		c := sites[trn.triangles[3 * t + 2]]
+		out[t] = circumcenter(a, b, c)
 	}
 	return out
 }
@@ -93,13 +95,17 @@ _voronoi_circumcenters :: proc(trn: ^Triangulation, allocator: runtime.Allocator
 // hull walks terminate at the boundary; with ghost points there should be no
 // real hull sites, but we keep this for robustness.
 @(private)
-_voronoi_inedges :: proc(trn: ^Triangulation, allocator: runtime.Allocator) -> []i32 {
-	n := len(trn.coords)
+_voronoi_inedges :: proc(
+	sites: []Vector2,
+	trn: ^Triangulation,
+	allocator: runtime.Allocator,
+) -> []i32 {
+	n := len(sites)
 	out := make([]i32, n, allocator)
 	for i in 0 ..< n do out[i] = -1
 	for e in 0 ..< len(trn.triangles) {
 		s := int(trn.triangles[_voronoi_next_he(e)])
-		if trn.halfedges[e] == -1 || out[s] == -1 {
+		if trn.halfedges[e] == EMPTY || out[s] == -1 {
 			out[s] = i32(e)
 		}
 	}
@@ -134,7 +140,7 @@ _voronoi_walk_cell :: proc(
 		e_next := _voronoi_next_he(e)
 		if int(trn.triangles[e_next]) != site do break
 		twin := trn.halfedges[e_next]
-		if twin == -1 do break
+		if twin == EMPTY do break
 		e = int(twin)
 		if e == e0 do break
 	}
@@ -142,14 +148,15 @@ _voronoi_walk_cell :: proc(
 
 @(private)
 _voronoi_lloyd_step :: proc(
+	sites: []Vector2,
 	trn: ^Triangulation,
 	relaxed: []Vector2,
 	width, height: f32,
 	allocator: runtime.Allocator,
 ) {
-	circ := _voronoi_circumcenters(trn, allocator)
+	circ := _voronoi_circumcenters(sites, trn, allocator)
 	defer delete(circ, allocator)
-	inedges := _voronoi_inedges(trn, allocator)
+	inedges := _voronoi_inedges(sites, trn, allocator)
 	defer delete(inedges, allocator)
 
 	tris: [dynamic]u32
@@ -177,6 +184,7 @@ _voronoi_lloyd_step :: proc(
 
 @(private)
 _voronoi_finalize :: proc(
+	sites: []Vector2,
 	trn: ^Triangulation,
 	relaxed: []Vector2,
 	width, height: f32,
@@ -184,8 +192,8 @@ _voronoi_finalize :: proc(
 ) -> Voronoi {
 	num_sites := len(relaxed)
 
-	circ := _voronoi_circumcenters(trn, allocator)
-	inedges := _voronoi_inedges(trn, allocator)
+	circ := _voronoi_circumcenters(sites, trn, allocator)
+	inedges := _voronoi_inedges(sites, trn, allocator)
 	defer delete(inedges, allocator)
 
 	cells := make([]VoronoiCell, num_sites, allocator)
@@ -264,11 +272,7 @@ _voronoi_clip_rect :: proc(
 }
 
 @(private)
-_voronoi_clip_edge :: proc(
-	src, dst: ^[dynamic]Vector2,
-	axis: int,
-	sign, limit: f32,
-) {
+_voronoi_clip_edge :: proc(src, dst: ^[dynamic]Vector2, axis: int, sign, limit: f32) {
 	clear(dst)
 	pts := src[:]
 	if len(pts) == 0 do return
