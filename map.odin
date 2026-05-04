@@ -559,61 +559,6 @@ draw_watermap_rgb :: proc(m: ^VoronoiMap, width, height: u32) -> []u8 {
 	return img
 }
 
-// =============================================================================
-// Entry point
-// =============================================================================
-
-gemmapmain :: proc() {
-	width, height: u32 = 2000, 2000
-	seed: u32 = 0xCAFEF00D
-
-	m := generate_map(width, height, seed)
-	defer voronoi_map_destroy(&m)
-
-	rgb := draw_image_rgb(&m, width, height); defer delete(rgb)
-	rgb_img := rl.Image {
-		data    = raw_data(rgb),
-		width   = i32(width),
-		height  = i32(height),
-		mipmaps = 1,
-		format  = .UNCOMPRESSED_R8G8B8,
-	}
-	if !rl.ExportImage(rgb_img, "map.png") {
-		fmt.eprintln("failed to write map.png")
-	}
-
-	water := draw_watermap_rgb(&m, width, height); defer delete(water)
-	water_img := rl.Image {
-		data    = raw_data(water),
-		width   = i32(width),
-		height  = i32(height),
-		mipmaps = 1,
-		format  = .UNCOMPRESSED_R8G8B8,
-	}
-	if !rl.ExportImage(water_img, "water.png") {
-		fmt.eprintln("failed to write water.png")
-	}
-
-	// 16-bit grayscale PGM is the easiest way to round-trip the heightmap;
-	// raylib's PNG exporter is 8-bit only.
-	hm := draw_heightmap_u16(&m, width, height); defer delete(hm)
-	write_pgm_p5("height.pgm", width, height, hm)
-
-	// 8-bit grayscale PNG preview (high byte of each u16).
-	hm8 := make([]u8, len(hm)); defer delete(hm8)
-	for v, i in hm do hm8[i] = u8(v >> 8)
-	hm_img := rl.Image {
-		data    = raw_data(hm8),
-		width   = i32(width),
-		height  = i32(height),
-		mipmaps = 1,
-		format  = .UNCOMPRESSED_GRAYSCALE,
-	}
-	if !rl.ExportImage(hm_img, "height.png") {
-		fmt.eprintln("failed to write height.png")
-	}
-}
-
 write_pgm_p5 :: proc(path: string, w, h: u32, data: []u16) {
 	f, err := os.open(path, os.O_WRONLY | os.O_CREATE | os.O_TRUNC)
 	if err != nil {
