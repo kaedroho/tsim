@@ -146,26 +146,20 @@ find_waterbodies :: proc(m: ^MapGeology) -> (bodies: [][]int, cell_to_body: []in
 
 // Land cells whose perimeter is more than 55% adjacent to water → Headland.
 find_headlands :: proc(m: ^MapGeology) {
-	rocks: [dynamic]int
-	defer delete(rocks)
-
-	for ct, idx in m.cell_types {
-		if !cell_is_land(ct) do continue
-
-		land_len, water_len: f32
-		for nb in m.voronoi.cells[idx].neighbors {
-			s, e, ok := get_edge_between_cells(m, idx, int(nb))
-			if !ok do continue
-			dx, dy := s.x - e.x, s.y - e.y
-			length := math.sqrt(dx * dx + dy * dy)
-			if cell_is_land(m.cell_types[nb]) do land_len += length
-			else do water_len += length
+	for &ct, idx in m.cell_types {
+		if land, ok := &ct.(Land); ok {
+			land_len, water_len: f32
+			for nb in m.voronoi.cells[idx].neighbors {
+				s, e, ok := get_edge_between_cells(m, idx, int(nb))
+				if !ok do continue
+				dx, dy := s.x - e.x, s.y - e.y
+				length := math.sqrt(dx * dx + dy * dy)
+				if cell_is_land(m.cell_types[nb]) do land_len += length
+				else do water_len += length
+			}
+			total := land_len + water_len
+			if total > 0 && water_len / total > 0.55 do land.headland = true
 		}
-		total := land_len + water_len
-		if total > 0 && water_len / total > 0.55 do append(&rocks, idx)
-	}
-	for idx in rocks do m.cell_types[idx] = Land {
-		headland = true,
 	}
 }
 
