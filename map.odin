@@ -18,10 +18,6 @@ import "core:math/rand"
 import vmem "core:mem/virtual"
 import "core:os"
 
-// =============================================================================
-// Cell types
-// =============================================================================
-
 Land :: struct {
 	headland: bool,
 	coastal:  bool,
@@ -43,10 +39,6 @@ cell_is_land :: proc(ct: CellType) -> bool {
 	}
 	return false
 }
-
-// =============================================================================
-// VoronoiMap
-// =============================================================================
 
 MapGeology :: struct {
 	width, height: u32,
@@ -282,10 +274,6 @@ voronoi_expand :: proc(m: ^MapGeology, radius: f32, seed: u32) -> MapGeology {
 	return map_geology_make(m.width, m.height, radius, seed, expand_init, m)
 }
 
-// =============================================================================
-// Map generation
-// =============================================================================
-
 PerlinThreshold :: struct {
 	seed:      i64,
 	threshold: f32,
@@ -452,10 +440,6 @@ generate_map :: proc(width, height: u32, seed: u32) -> Map {
 map_destroy :: proc(m: ^Map) {
 	map_geology_destroy(&m.geology)
 }
-
-// =============================================================================
-// Image output
-// =============================================================================
 
 color_for :: proc(ct: CellType) -> (r, g, b: u8) {
 	switch v in ct {
