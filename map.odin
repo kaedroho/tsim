@@ -23,20 +23,35 @@ import rl "vendor:raylib"
 // Cell types
 // =============================================================================
 
-CellType :: enum u8 {
+LandType :: enum {
 	Land,
-	Water,
 	Headland,
 	Beach,
 	Cliff,
+}
+
+Land :: struct {
+	type: LandType,
+}
+
+WaterType :: enum {
 	Cove,
 	Channel,
 	Ocean,
 }
 
+Water :: struct {
+	type: WaterType,
+}
+
+CellType :: union {
+	Land,
+	Water,
+}
+
 cell_is_land :: proc(ct: CellType) -> bool {
-	#partial switch ct {
-	case .Land, .Headland, .Beach, .Cliff:
+	#partial switch v in ct {
+	case Land:
 		return true
 	}
 	return false
@@ -170,7 +185,9 @@ find_headlands :: proc(m: ^VoronoiMap) {
 		total := land_len + water_len
 		if total > 0 && water_len / total > 0.55 do append(&rocks, idx)
 	}
-	for idx in rocks do m.cell_types[idx] = .Headland
+	for idx in rocks do m.cell_types[idx] = Land {
+		type = .Headland,
+	}
 }
 
 // Land cells touching any water → Beach
@@ -182,21 +199,26 @@ find_beaches_and_cliffs :: proc(m: ^VoronoiMap) {
 	defer delete(cliffs)
 
 	for ct, idx in m.cell_types {
-		if !cell_is_land(ct) do continue
-		for nb in m.voronoi.cells[idx].neighbors {
-			if !cell_is_land(m.cell_types[nb]) {
-				if ct == .Headland {
-					append(&cliffs, idx)
-				} else {
-					append(&beaches, idx)
+		if land, ok := ct.(Land); ok {
+			for nb in m.voronoi.cells[idx].neighbors {
+				if water, ok := m.cell_types[nb].(Water); ok {
+					if land.type == .Headland {
+						append(&cliffs, idx)
+					} else {
+						append(&beaches, idx)
+					}
+					break
 				}
-				break
 			}
 		}
 	}
 
-	for idx in beaches do m.cell_types[idx] = .Beach
-	for idx in cliffs do m.cell_types[idx] = .Cliff
+	for idx in beaches do m.cell_types[idx] = Land {
+		type = .Beach,
+	}
+	for idx in cliffs do m.cell_types[idx] = Land {
+		type = .Cliff,
+	}
 }
 
 // Convert land cells adjacent to two or more distinct waterbodies to water,
@@ -221,7 +243,9 @@ make_waterbodies_navigable :: proc(m: ^VoronoiMap) {
 		}
 		if len(seen) >= 2 do append(&targets, idx)
 	}
-	for idx in targets do m.cell_types[idx] = .Water
+	for idx in targets do m.cell_types[idx] = Water {
+		type = .Ocean,
+	}
 }
 
 // Classify water cells by counting land/water transitions around their ring of
@@ -254,9 +278,15 @@ classify_water_cells :: proc(m: ^VoronoiMap) {
 			append(&channels, idx)
 		}
 	}
-	for i in oceans do m.cell_types[i] = .Ocean
-	for i in coves do m.cell_types[i] = .Cove
-	for i in channels do m.cell_types[i] = .Channel
+	for i in oceans do m.cell_types[i] = Water {
+		type = .Ocean,
+	}
+	for i in coves do m.cell_types[i] = Water {
+		type = .Cove,
+	}
+	for i in channels do m.cell_types[i] = Water {
+		type = .Channel,
+	}
 }
 
 // Cellular-automaton smoothing. A land cell with <25% land neighbours becomes
@@ -279,9 +309,9 @@ voronoi_smooth :: proc(m: ^VoronoiMap, rounds: int) {
 			}
 			land_frac := f32(land_count) / f32(total)
 			if cell_is_land(m.cell_types[i]) {
-				next[i] = .Water if land_frac < 0.25 else m.cell_types[i]
+				next[i] = Water{type = .Ocean} if land_frac < 0.25 else m.cell_types[i]
 			} else {
-				next[i] = .Land if land_frac > 0.75 else m.cell_types[i]
+				next[i] = Land{type = .Land} if land_frac > 0.75 else m.cell_types[i]
 			}
 		}
 		m.cell_types, next = next, m.cell_types
@@ -312,7 +342,7 @@ PerlinThreshold :: struct {
 perlin_init :: proc(position: [2]f32, user_data: rawptr) -> (CellType, f32) {
 	p := cast(^PerlinThreshold)user_data
 	n := noise.noise_2d(p.seed, {f64(position[0] * 10.0), f64(position[1] * 10.0)})
-	return (.Land if f32(n) > p.threshold else .Water), 0.0
+	return (Land{type = .Land} if f32(n) > p.threshold else Water{type = .Ocean}), 0.0
 }
 
 count_land :: proc(m: ^VoronoiMap) -> int {
@@ -360,8 +390,10 @@ generate_map :: proc(width, height: u32, seed: u32) -> VoronoiMap {
 
 	// Convert remaining headlands into land
 	for &ct, idx in l4.cell_types {
-		if ct == .Headland {
-			ct = .Land
+		if land, ok := ct.(Land); ok {
+			if land.type == .Headland {
+				land.type = .Land
+			}
 		}
 	}
 
@@ -388,9 +420,11 @@ generate_map :: proc(width, height: u32, seed: u32) -> VoronoiMap {
 	}
 	// Seed: headland cells.
 	for ct, idx in l4.cell_types {
-		if ct == .Headland {
-			dist_headland_known[idx] = true
-			dist_headland[idx] = 0
+		if land, ok := ct.(Land); ok {
+			if land.type == .Headland {
+				dist_headland_known[idx] = true
+				dist_headland[idx] = 0
+			}
 		}
 	}
 
@@ -473,21 +507,25 @@ generate_map :: proc(width, height: u32, seed: u32) -> VoronoiMap {
 // =============================================================================
 
 color_for :: proc(ct: CellType) -> (r, g, b: u8) {
-	switch ct {
-	case .Land:
-		return 0, 255, 0
-	case .Water:
-		return 0, 0, 255
-	case .Headland, .Cliff:
-		return 200, 200, 200
-	case .Beach:
-		return 255, 255, 0
-	case .Cove:
-		return 179, 236, 255
-	case .Channel:
-		return 43, 176, 237
-	case .Ocean:
-		return 3, 83, 136
+	switch v in ct {
+	case Land:
+		switch v.type {
+		case .Headland, .Cliff:
+			return 200, 200, 200
+		case .Beach:
+			return 255, 255, 0
+		case .Land:
+			return 0, 255, 0
+		}
+	case Water:
+		switch v.type {
+		case .Cove:
+			return 179, 236, 255
+		case .Channel:
+			return 43, 176, 237
+		case .Ocean:
+			return 3, 83, 136
+		}
 	}
 	return 0, 0, 0
 }
