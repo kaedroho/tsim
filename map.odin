@@ -28,6 +28,7 @@ CellType :: enum u8 {
 	Water,
 	Headland,
 	Beach,
+	Cliff,
 	Cove,
 	Channel,
 	Ocean,
@@ -35,7 +36,7 @@ CellType :: enum u8 {
 
 cell_is_land :: proc(ct: CellType) -> bool {
 	#partial switch ct {
-	case .Land, .Headland, .Beach:
+	case .Land, .Headland, .Beach, .Cliff:
 		return true
 	}
 	return false
@@ -172,21 +173,30 @@ find_headlands :: proc(m: ^VoronoiMap) {
 	for idx in rocks do m.cell_types[idx] = .Headland
 }
 
-// Land cells touching any water (and not already a headland) → Beach.
-find_beaches :: proc(m: ^VoronoiMap) {
+// Land cells touching any water → Beach
+// Headland cells touching any water → Cliff
+find_beaches_and_cliffs :: proc(m: ^VoronoiMap) {
 	beaches: [dynamic]int
+	cliffs: [dynamic]int
 	defer delete(beaches)
+	defer delete(cliffs)
 
 	for ct, idx in m.cell_types {
-		if !cell_is_land(ct) || ct == .Headland do continue
+		if !cell_is_land(ct) do continue
 		for nb in m.voronoi.cells[idx].neighbors {
 			if !cell_is_land(m.cell_types[nb]) {
-				append(&beaches, idx)
+				if ct == .Headland {
+					append(&cliffs, idx)
+				} else {
+					append(&beaches, idx)
+				}
 				break
 			}
 		}
 	}
+
 	for idx in beaches do m.cell_types[idx] = .Beach
+	for idx in cliffs do m.cell_types[idx] = .Cliff
 }
 
 // Convert land cells adjacent to two or more distinct waterbodies to water,
@@ -346,7 +356,14 @@ generate_map :: proc(width, height: u32, seed: u32) -> VoronoiMap {
 
 	l4 := voronoi_expand(&l3, 5.0, seed); voronoi_map_destroy(&l3)
 	voronoi_smooth(&l4, 2)
-	find_beaches(&l4)
+	find_beaches_and_cliffs(&l4)
+
+	// Convert remaining headlands into land
+	for &ct, idx in l4.cell_types {
+		if ct == .Headland {
+			ct = .Land
+		}
+	}
 
 	// Distance-to-coast and distance-to-headland fields (BFS-ish, with random
 	// jitter at increasing levels).
@@ -461,7 +478,7 @@ color_for :: proc(ct: CellType) -> (r, g, b: u8) {
 		return 0, 255, 0
 	case .Water:
 		return 0, 0, 255
-	case .Headland:
+	case .Headland, .Cliff:
 		return 200, 200, 200
 	case .Beach:
 		return 255, 255, 0
