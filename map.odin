@@ -28,14 +28,8 @@ Land :: struct {
 	coastal:  bool,
 }
 
-WaterType :: enum {
-	Cove,
-	Channel,
-	Ocean,
-}
-
 Water :: struct {
-	type: WaterType,
+	cove: bool,
 }
 
 CellType :: union {
@@ -220,49 +214,31 @@ make_waterbodies_navigable :: proc(m: ^VoronoiMap) {
 		}
 		if len(seen) >= 2 do append(&targets, idx)
 	}
-	for idx in targets do m.cell_types[idx] = Water {
-		type = .Ocean,
-	}
+	for idx in targets do m.cell_types[idx] = Water{}
 }
 
-// Classify water cells by counting land/water transitions around their ring of
-// neighbours: 0 = Ocean (fully surrounded by water), 2 = Cove, more = Channel.
-classify_water_cells :: proc(m: ^VoronoiMap) {
-	coves, channels, oceans: [dynamic]int
-	defer {delete(coves); delete(channels); delete(oceans)}
+// Detect coves by counting land/water transitions around their ring of
+// neighbours
+detect_coves :: proc(m: ^VoronoiMap) {
+	for &ct, idx in m.cell_types {
+		if water, ok := &ct.(Water); ok {
+			nbs := m.voronoi.cells[idx].neighbors
+			if len(nbs) == 0 do continue
 
-	for ct, idx in m.cell_types {
-		if cell_is_land(ct) do continue
-		nbs := m.voronoi.cells[idx].neighbors
-		if len(nbs) == 0 do continue
+			first_is_land := cell_is_land(m.cell_types[nbs[0]])
+			prev_is_land := first_is_land
+			transitions := 0
+			for k in 1 ..< len(nbs) {
+				is_land := cell_is_land(m.cell_types[nbs[k]])
+				if is_land != prev_is_land do transitions += 1
+				prev_is_land = is_land
+			}
+			if prev_is_land != first_is_land do transitions += 1
 
-		first_is_land := cell_is_land(m.cell_types[nbs[0]])
-		prev_is_land := first_is_land
-		transitions := 0
-		for k in 1 ..< len(nbs) {
-			is_land := cell_is_land(m.cell_types[nbs[k]])
-			if is_land != prev_is_land do transitions += 1
-			prev_is_land = is_land
+			if transitions == 2 {
+				water.cove = true
+			}
 		}
-		if prev_is_land != first_is_land do transitions += 1
-
-		switch transitions {
-		case 0:
-			append(&oceans, idx)
-		case 2:
-			append(&coves, idx)
-		case:
-			append(&channels, idx)
-		}
-	}
-	for i in oceans do m.cell_types[i] = Water {
-		type = .Ocean,
-	}
-	for i in coves do m.cell_types[i] = Water {
-		type = .Cove,
-	}
-	for i in channels do m.cell_types[i] = Water {
-		type = .Channel,
 	}
 }
 
@@ -286,7 +262,7 @@ voronoi_smooth :: proc(m: ^VoronoiMap, rounds: int) {
 			}
 			land_frac := f32(land_count) / f32(total)
 			if cell_is_land(m.cell_types[i]) {
-				next[i] = Water{type = .Ocean} if land_frac < 0.25 else m.cell_types[i]
+				next[i] = Water{} if land_frac < 0.25 else m.cell_types[i]
 			} else {
 				next[i] = Land{} if land_frac > 0.75 else m.cell_types[i]
 			}
@@ -319,7 +295,7 @@ PerlinThreshold :: struct {
 perlin_init :: proc(position: [2]f32, user_data: rawptr) -> (CellType, f32) {
 	p := cast(^PerlinThreshold)user_data
 	n := noise.noise_2d(p.seed, {f64(position[0] * 10.0), f64(position[1] * 10.0)})
-	return (Land{} if f32(n) > p.threshold else Water{type = .Ocean}), 0.0
+	return (Land{} if f32(n) > p.threshold else Water{}), 0.0
 }
 
 count_land :: proc(m: ^VoronoiMap) -> int {
@@ -351,7 +327,7 @@ generate_map :: proc(width, height: u32, seed: u32) -> VoronoiMap {
 	}
 
 	make_waterbodies_navigable(&l1)
-	classify_water_cells(&l1)
+	detect_coves(&l1)
 
 	l2 := voronoi_expand(&l1, 50.0, seed); voronoi_map_destroy(&l1)
 	voronoi_smooth(&l2, 2)
@@ -482,19 +458,19 @@ color_for :: proc(ct: CellType) -> (r, g, b: u8) {
 			// Cliff
 			return 200, 200, 200
 		case v.coastal:
-			// beach
+			// Beach
 			return 255, 255, 0
 		case:
 			// Land
 			return 0, 255, 0
 		}
 	case Water:
-		switch v.type {
-		case .Cove:
+		switch {
+		case v.cove:
+			// Cove
 			return 179, 236, 255
-		case .Channel:
-			return 43, 176, 237
-		case .Ocean:
+		case:
+			// Ocean
 			return 3, 83, 136
 		}
 	}
