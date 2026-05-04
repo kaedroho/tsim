@@ -19,8 +19,9 @@ import vmem "core:mem/virtual"
 import "core:os"
 
 Land :: struct {
-	headland: bool,
-	coastal:  bool,
+	headland:  bool,
+	mountains: bool,
+	coastal:   bool,
 }
 
 Water :: struct {
@@ -142,6 +143,26 @@ find_waterbodies :: proc(m: ^MapGeology) -> (bodies: [][]int, cell_to_body: []in
 		append(&bodies_dyn, body[:])
 	}
 	return bodies_dyn[:], cell_to_body
+}
+
+find_mountains :: proc(m: ^MapGeology, seed: i64) {
+	for &ct, idx in m.cell_types {
+		if land, ok := &ct.(Land); ok {
+			n1 := noise.noise_2d(
+				seed,
+				{f64(m.positions[idx].x * 5.0), f64(m.positions[idx].y * 5.0)},
+			)
+
+			n2 := noise.noise_2d(
+				seed,
+				{-f64(m.positions[idx].x) / 5.0, -f64(m.positions[idx].y) / 5.0},
+			)
+
+			if f32(n1) > -0.5 && f32(n2) > -0.0 {
+				land.mountains = true
+			}
+		}
+	}
 }
 
 // Land cells whose perimeter is more than 55% adjacent to water → Headland.
@@ -313,6 +334,7 @@ generate_map :: proc(width, height: u32, seed: u32) -> Map {
 
 	make_waterbodies_navigable(&l1)
 	detect_coves(&l1)
+	find_mountains(&l1, i64(seed))
 
 	l2 := voronoi_expand(&l1, 50.0, seed); map_geology_destroy(&l1)
 	voronoi_smooth(&l2, 2)
@@ -445,6 +467,9 @@ color_for :: proc(ct: CellType) -> (r, g, b: u8) {
 		case v.coastal:
 			// Beach
 			return 255, 255, 0
+		case v.mountains:
+			// Mountain
+			return 0, 128, 0
 		case:
 			// Land
 			return 0, 255, 0
