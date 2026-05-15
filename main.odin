@@ -1,83 +1,93 @@
 package main
 
 import "core:fmt"
-import rl "vendor:raylib"
+import "core:nbio"
+import sdl "vendor:sdl3"
 
 MAP_WIDTH, MAP_HEIGHT :: 2000, 2000
 MAP_SEED :: 0xCAFEF00D
 
-SCALE :: f32(0.5) // world is 2000x2000, window is 1000x1000
-
-main :: proc() {
+load_map :: proc() {
 	m := generate_map(MAP_WIDTH, MAP_HEIGHT, MAP_SEED)
 	defer map_destroy(&m)
+}
 
-	rgb := draw_image_rgb(&m.geology, MAP_WIDTH, MAP_HEIGHT); defer delete(rgb)
-	rgb_img := rl.Image {
-		data    = raw_data(rgb),
-		width   = i32(MAP_WIDTH),
-		height  = i32(MAP_HEIGHT),
-		mipmaps = 1,
-		format  = .UNCOMPRESSED_R8G8B8,
+main :: proc() {
+	// Setup I/O
+	if err := nbio.acquire_thread_event_loop(); err != nil {
+		fmt.eprintln("acquire_thread_event_loop:", nbio.error_string(err))
+		return
 	}
-	if !rl.ExportImage(rgb_img, "map.png") {
-		fmt.eprintln("failed to write map.png")
-	}
+	defer nbio.release_thread_event_loop()
 
-	water := draw_watermap_rgb(&m.geology, MAP_WIDTH, MAP_HEIGHT); defer delete(water)
-	water_img := rl.Image {
-		data    = raw_data(water),
-		width   = i32(MAP_WIDTH),
-		height  = i32(MAP_HEIGHT),
-		mipmaps = 1,
-		format  = .UNCOMPRESSED_R8G8B8,
+	// Setup SDL
+	meta_ok := sdl.SetAppMetadata("TSim", "0.1", "uk.kaed.tsim")
+	sdl_ok := sdl.Init({.VIDEO})
+	if !meta_ok || !sdl_ok {
+		fmt.eprintln("Failed to initialize SDL:", sdl.GetError())
+		return
 	}
-	if !rl.ExportImage(water_img, "water.png") {
-		fmt.eprintln("failed to write water.png")
-	}
+	defer sdl.Quit()
 
-	// 16-bit grayscale PGM is the easiest way to round-trip the heightmap;
-	// raylib's PNG exporter is 8-bit only.
-	hm := draw_heightmap_u16(&m.geology, MAP_WIDTH, MAP_HEIGHT); defer delete(hm)
-	write_pgm_p5("height.pgm", MAP_WIDTH, MAP_HEIGHT, hm)
-
-	// 8-bit grayscale PNG preview (high byte of each u16).
-	hm8 := make([]u8, len(hm)); defer delete(hm8)
-	for v, i in hm do hm8[i] = u8(v >> 8)
-	hm_img := rl.Image {
-		data    = raw_data(hm8),
-		width   = i32(MAP_WIDTH),
-		height  = i32(MAP_HEIGHT),
-		mipmaps = 1,
-		format  = .UNCOMPRESSED_GRAYSCALE,
+	// Setup window
+	window := sdl.CreateWindow("TSim", 1000, 1000, nil)
+	if window == nil {
+		fmt.eprintln("Failed to create Window:", sdl.GetError())
+		return
 	}
-	if !rl.ExportImage(hm_img, "height.png") {
-		fmt.eprintln("failed to write height.png")
+	defer sdl.DestroyWindow(window)
+
+	// Setup GPU device
+	gpu := sdl.CreateGPUDevice({.METALLIB}, true, nil)
+	if gpu == nil {
+		fmt.eprintln("Failed to create GPU device:", sdl.GetError())
+		return
 	}
 
-	is_neighbor := make([]bool, len(m.geology.voronoi.cells))
-	defer delete(is_neighbor)
+	ok := sdl.ClaimWindowForGPUDevice(gpu, window)
+	if !ok {
+		fmt.eprintln("Failed to claim window for GPU device:", sdl.GetError())
+		return
+	}
 
-	rl.InitWindow(1000, 1000, "TSim")
-	defer rl.CloseWindow()
+	main_loop: for {
+		frame_start := sdl.GetTicksNS()
 
+		// I/O Poll
+		nbio.tick()
 
-	for !rl.WindowShouldClose() {
-		nearest, _, _ := kdtree_nearest(m.geology.kdtree, rl.GetMousePosition() * 2)
-
-		// Refresh neighbour mask for the nearest cell.
-		for i in 0 ..< len(is_neighbor) do is_neighbor[i] = false
-		for nb in m.geology.voronoi.cells[nearest].neighbors {
-			is_neighbor[nb] = true
+		// SDL events
+		for e: sdl.Event; sdl.PollEvent(&e); {
+			#partial switch e.type {
+			case .QUIT:
+				break main_loop
+			case .WINDOW_CLOSE_REQUESTED:
+				break main_loop
+			}
 		}
 
-		rl.BeginDrawing()
-		rl.ClearBackground(rl.BLUE)
+		// Render
+		cmd_buf := sdl.AcquireGPUCommandBuffer(gpu)
+		swapchain_tex: ^sdl.GPUTexture
+		ok = sdl.WaitAndAcquireGPUSwapchainTexture(
+			cmd_buf,
+			window,
+			&swapchain_tex,
+			nil,
+			nil,
+		); assert(ok)
+		color_target := sdl.GPUColorTargetInfo {
+			texture     = swapchain_tex,
+			load_op     = .CLEAR,
+			clear_color = {0, 0.2, 0.4, 1},
+			store_op    = .STORE,
+		}
+		render_pass := sdl.BeginGPURenderPass(cmd_buf, &color_target, 1, nil)
+		// Draw here
+		sdl.EndGPURenderPass(render_pass)
 
-		fps := rl.GetFPS()
-		rl.DrawText(fmt.ctprint("FPS: ", fps), 10, 10, 20, rl.BLACK)
+		ok = sdl.SubmitGPUCommandBuffer(cmd_buf); assert(ok)
 
-		rl.EndDrawing()
 		free_all(context.temp_allocator)
 	}
 }
