@@ -21,6 +21,7 @@ main :: proc() {
 	defer nbio.release_thread_event_loop()
 
 	// Setup SDL
+	sdl.SetLogPriorities(.VERBOSE)
 	meta_ok := sdl.SetAppMetadata("TSim", "0.1", "uk.kaed.tsim")
 	sdl_ok := sdl.Init({.VIDEO})
 	if !meta_ok || !sdl_ok {
@@ -32,7 +33,7 @@ main :: proc() {
 	// Setup window
 	window := sdl.CreateWindow("TSim", 1000, 1000, nil)
 	if window == nil {
-		fmt.eprintln("Failed to create Window:", sdl.GetError())
+		fmt.eprintln("Failed to create window:", sdl.GetError())
 		return
 	}
 	defer sdl.DestroyWindow(window)
@@ -43,12 +44,16 @@ main :: proc() {
 		fmt.eprintln("Failed to create GPU device:", sdl.GetError())
 		return
 	}
-
+	defer sdl.DestroyGPUDevice(gpu)
 	ok := sdl.ClaimWindowForGPUDevice(gpu, window)
 	if !ok {
 		fmt.eprintln("Failed to claim window for GPU device:", sdl.GetError())
 		return
 	}
+
+	// Create debug window
+	debug_init()
+	defer debug_fini()
 
 	main_loop: for {
 		frame_start := sdl.GetTicksNS()
@@ -87,6 +92,9 @@ main :: proc() {
 		sdl.EndGPURenderPass(render_pass)
 
 		ok = sdl.SubmitGPUCommandBuffer(cmd_buf); assert(ok)
+
+		// Debug render
+		debug_render()
 
 		free_all(context.temp_allocator)
 	}
